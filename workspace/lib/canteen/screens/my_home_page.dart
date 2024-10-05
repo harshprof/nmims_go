@@ -19,7 +19,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String selectedCategory = 'Chaat';
   List<dynamic> menuItems = [];
   List<dynamic> filteredMenuItems = [];
-  Map<String, int> cart = {}; // Updated cart
+  Map<String, int> cart = {};
 
   @override
   void initState() {
@@ -56,12 +56,21 @@ class _MyHomePageState extends State<MyHomePage> {
         .toList();
   }
 
-  void addToCart(String itemId) {
+  void updateCart(String itemId, int change) {
     setState(() {
-      cart[itemId] = (cart[itemId] ?? 0) + 1;
+      if (cart.containsKey(itemId)) {
+        cart[itemId] = (cart[itemId] ?? 0) + change;
+        if (cart[itemId]! <= 0) {
+          cart.remove(itemId);
+        }
+      } else if (change > 0) {
+        cart[itemId] = change;
+      }
     });
+  }
 
-    // Show custom toast message
+  void addToCart(String itemId) {
+    updateCart(itemId, 1);
     CustomToast.show(
       context,
       "Item added to cart",
@@ -70,14 +79,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void removeFromCart(String itemId) {
-    setState(() {
-      if (cart[itemId] != null && cart[itemId]! > 0) {
-        cart[itemId] = cart[itemId]! - 1;
-        if (cart[itemId] == 0) {
-          cart.remove(itemId);
-        }
-      }
-    });
+    updateCart(itemId, -1);
   }
 
   String generateUniqueId(Map<String, dynamic> item) {
@@ -86,8 +88,6 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    print("Building MyHomePage");
-
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -121,7 +121,6 @@ class _MyHomePageState extends State<MyHomePage> {
                     scrollDirection: Axis.horizontal,
                     itemCount: categories.length,
                     itemBuilder: (context, index) {
-                      print("Building CategoryIcon for ${categories[index]}");
                       return CategoryIcon(
                         category: categories[index],
                         isSelected: selectedCategory == categories[index],
@@ -158,7 +157,6 @@ class _MyHomePageState extends State<MyHomePage> {
                     itemBuilder: (context, index) {
                       final item = filteredMenuItems[index];
                       final itemId = item['id'] ?? 'unknown_id';
-                      print("Building MenuItem for ${item['name']}");
                       return MenuItem(
                         menuItem: item,
                         onAdd: () => addToCart(itemId),
@@ -173,18 +171,19 @@ class _MyHomePageState extends State<MyHomePage> {
       floatingActionButton: cart.isNotEmpty
           ? FloatingActionButton.extended(
               onPressed: () async {
-                // Await the result from CartScreen and update the cart
-                final updatedCart = await Navigator.push(
+                final updatedCart = await Navigator.push<Map<String, int>>(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => CartScreen(cart: cart, menuItems: menuItems),
+                    builder: (context) => CartScreen(
+                      cart: cart,
+                      menuItems: menuItems,
+                      onUpdateCart: updateCart,
+                    ),
                   ),
                 );
-
-                // Check if the cart was updated and is not null
                 if (updatedCart != null) {
                   setState(() {
-                    cart = Map<String, int>.from(updatedCart);
+                    cart = updatedCart;
                   });
                 }
               },

@@ -2,13 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import './bill_screen.dart';
+// import 'stock_checker.dart'; // Commented out since stock management is not being used yet
 
 class CartScreen extends StatefulWidget {
   final Map<String, int> cart;
   final List<dynamic> menuItems;
+  final Function(String, int) onUpdateCart;
 
-  const CartScreen({Key? key, required this.cart, required this.menuItems})
-      : super(key: key);
+  const CartScreen({
+    Key? key,
+    required this.cart,
+    required this.menuItems,
+    required this.onUpdateCart,
+  }) : super(key: key);
 
   @override
   _CartScreenState createState() => _CartScreenState();
@@ -25,133 +32,43 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   double calculateTotalAmount() {
-    return cart.entries.fold(0.0, (total, entry) {
-      var item = widget.menuItems
-          .firstWhere((item) => item['id'] == entry.key, orElse: () => null);
-      return total +
-          (item != null
-              ? (item['price'] as num).toDouble() * entry.value
-              : 0.0);
-    });
-  }
-
-  Future<bool> checkStockAvailability() async {
-    bool isStockSufficient = true;
-    String insufficientItems = '';
-
-    try {
-      User? user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        throw Exception('User not authenticated');
-      }
-
-      for (String itemName in cart.keys) {
-        try {
-          // Query Firestore by 'name' field instead of document ID
-          QuerySnapshot querySnapshot = await FirebaseFirestore.instance
-              .collection('menu')
-              .where('name', isEqualTo: itemName)
-              .get();
-
-          if (querySnapshot.docs.isNotEmpty) {
-            DocumentSnapshot itemDoc = querySnapshot.docs.first;
-            int stock = itemDoc['stock'] ?? 0;
-            if (stock < cart[itemName]!) {
-              insufficientItems += '${itemDoc['name']} (available: $stock), ';
-              isStockSufficient = false;
-            }
-          } else {
-            throw Exception('Menu item not found: $itemName');
-          }
-        } catch (e) {
-          print('Error checking stock for item $itemName: $e');
-          throw Exception('Menu item not found: $itemName');
-        }
-      }
-
-      if (!isStockSufficient) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Insufficient Stock'),
-            content: Text(
-                'The following items have insufficient stock: $insufficientItems'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
-      }
-    } catch (e) {
-      print('Error checking stock availability: $e');
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Error'),
-          content: const Text(
-              'An error occurred while checking stock availability. Please try again later.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
+    double totalAmount = 0.0;
+    cart.forEach((itemId, quantity) {
+      var item = widget.menuItems.firstWhere(
+        (item) => item['id'] == itemId,
+        orElse: () => null,
       );
-      return false;
-    }
-
-    return isStockSufficient;
-  }
-
-  Future<void> updateStockAfterPayment() async {
-    WriteBatch batch = FirebaseFirestore.instance.batch();
-
-    try {
-      for (String itemId in cart.keys) {
-        DocumentReference itemRef =
-            FirebaseFirestore.instance.collection('menu').doc(itemId);
-        DocumentSnapshot itemSnapshot = await itemRef.get();
-
-        if (itemSnapshot.exists) {
-          int currentStock = itemSnapshot['stock'];
-          int newStock = currentStock - cart[itemId]!;
-
-          if (newStock < 0) {
-            throw Exception(
-                'Insufficient stock for item: ${itemSnapshot['name']}');
-          }
-
-          batch.update(itemRef, {'stock': newStock});
-        } else {
-          throw Exception('Menu item not found: $itemId');
-        }
+      if (item != null) {
+        double price = (item['price'] as num).toDouble();
+        totalAmount += price * quantity;
       }
-
-      await batch.commit();
-    } catch (e) {
-      print('Error updating stock: $e');
-      throw Exception('Failed to update stock: $e');
-    }
+    });
+    return totalAmount;
   }
 
   void _removeItem(String key) {
     setState(() {
       cart.remove(key);
     });
+    widget.onUpdateCart(key, -widget.cart[key]!);
   }
 
   void _reduceItemQuantity(String key) {
     setState(() {
       if (cart[key]! > 1) {
         cart[key] = cart[key]! - 1;
+        widget.onUpdateCart(key, -1);
       } else {
         _removeItem(key);
       }
     });
+  }
+
+  void _increaseItemQuantity(String key) {
+    setState(() {
+      cart[key] = (cart[key] ?? 0) + 1;
+    });
+    widget.onUpdateCart(key, 1);
   }
 
   Future<String> generateOrderId() async {
@@ -175,81 +92,48 @@ class _CartScreenState extends State<CartScreen> {
     });
   }
 
-  Future<void> _checkout() async {
+  Future _checkout() async {
     setState(() {
       _isCheckingOut = true;
     });
 
     try {
-      bool isStockAvailable = await checkStockAvailability();
+      String orderId = await generateOrderId();
 
-      if (isStockAvailable) {
-        await updateStockAfterPayment();
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw Exception('User not authenticated');
 
-        String orderId = await generateOrderId();
+      Map<String, int> typedCart = Map<String, int>.from(cart);
 
-        User? user = FirebaseAuth.instance.currentUser;
-        if (user == null) throw Exception('User not authenticated');
+      double totalAmount = calculateTotalAmount();
 
-        Map<String, dynamic> orderDetails = {
-          'orderId': orderId,
-          'cart': cart,
-          'totalAmount': calculateTotalAmount(),
-          'isOrderPending': true,
-          'createdAt': FieldValue.serverTimestamp(),
-          'userId': user.uid,
-        };
+      Map<String, dynamic> orderDetails = {
+        'orderId': orderId,
+        'cart': typedCart, // Pass the cart correctly
+        'totalAmount': totalAmount, // Calculate total amount
+        'isOrderPending': true,
+        'createdAt': FieldValue.serverTimestamp(),
+        'userId': user.uid,
+      };
 
-        DocumentReference orderRef = await FirebaseFirestore.instance
-            .collection('orders')
-            .add(orderDetails);
-        DocumentSnapshot orderSnapshot = await orderRef.get();
-        Timestamp createdAtTimestamp = orderSnapshot['createdAt'] as Timestamp;
+      await FirebaseFirestore.instance.collection('orders').add(orderDetails);
 
-        String formattedTime = DateFormat('yyyy-MM-dd – kk:mm')
-            .format(createdAtTimestamp.toDate());
-
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Payment Successful'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Thank you for your purchase!'),
-                const SizedBox(height: 10),
-                Text('Order ID: $orderId'),
-                const SizedBox(height: 10),
-                Text(
-                    'Total Amount: ₹${calculateTotalAmount().toStringAsFixed(2)}'),
-                const SizedBox(height: 10),
-                Text('Bill Generated At: $formattedTime'),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                },
-                child: const Text('OK'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  await completeOrder(orderId);
-                  Navigator.pop(context);
-                },
-                child: const Text('Mark as Completed'),
-              ),
-            ],
+      // Pass the typed cart to BillScreen
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => BillScreen(
+            orderId: orderId,
+            totalAmount: totalAmount,
+            cart: typedCart, // Pass the correct cart
+            menuItems: widget.menuItems,
+            generationTime: DateTime.now(), // Pass the current time or the time from your order data
           ),
-        );
+        ),
+      );
 
-        // Clear the cart after successful checkout
-        setState(() {
-          cart.clear();
-        });
-      }
+      setState(() {
+        cart.clear(); // Clear cart after checkout
+      });
     } catch (e) {
       print('Error during checkout: $e');
       showDialog(
@@ -292,102 +176,126 @@ class _CartScreenState extends State<CartScreen> {
   Widget build(BuildContext context) {
     double totalAmount = calculateTotalAmount();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Your Cart'),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(8.0),
-        children: cart.keys.map((key) {
-          var item = widget.menuItems
-              .firstWhere((item) => item['id'] == key, orElse: () => null);
-          if (item == null) {
-            return const ListTile(
-              title: Text('Unknown item'),
-              subtitle: Text('No price available'),
-              trailing: Text('0'),
-            );
-          } else {
-            double price = (item['price'] as num).toDouble();
-            double itemTotalPrice = price * cart[key]!;
-            return Card(
-              elevation: 4,
-              margin: const EdgeInsets.symmetric(vertical: 8.0),
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            item['name'],
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.of(context).pop(cart);
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Your Cart'),
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back),
+            onPressed: () {
+              Navigator.of(context).pop(cart);
+            },
+          ),
+        ),
+        body: cart.isEmpty
+            ? Center(
+                child: Text(
+                  'Your cart is empty',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              )
+            : ListView(
+                padding: const EdgeInsets.all(8.0),
+                children: cart.keys.map((key) {
+                  var item = widget.menuItems.firstWhere(
+                      (item) => item['id'] == key,
+                      orElse: () => null);
+                  if (item == null) {
+                    return const ListTile(
+                      title: Text('Unknown item'),
+                      subtitle: Text('No price available'),
+                      trailing: Text('0'),
+                    );
+                  } else {
+                    double price = (item['price'] as num).toDouble();
+                    double itemTotalPrice = price * cart[key]!;
+                    return Card(
+                      elevation: 4,
+                      margin: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    item['name'],
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '₹${price.toStringAsFixed(2)} x ${cart[key]}',
+                                    style: const TextStyle(fontSize: 16),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Total: ₹${itemTotalPrice.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black54,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '₹${price.toStringAsFixed(2)} x ${cart[key]}',
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Total: ₹${itemTotalPrice.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black54,
+                            Column(
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.remove_circle_outline),
+                                  onPressed: () => _reduceItemQuantity(key),
+                                ),
+                                Text(
+                                  '${cart[key]}',
+                                  style: const TextStyle(fontSize: 18),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.add_circle_outline),
+                                  onPressed: () => _increaseItemQuantity(key),
+                                ),
+                              ],
                             ),
-                          ),
-                        ],
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => _removeItem(key),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    Column(
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline),
-                          onPressed: () => _reduceItemQuantity(key),
-                        ),
-                        Text(
-                          '${cart[key]}',
-                          style: const TextStyle(fontSize: 18),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _removeItem(key),
-                        ),
-                      ],
-                    ),
-                  ],
+                    );
+                  }
+                }).toList(),
+              ),
+        bottomNavigationBar: BottomAppBar(
+          child: Container(
+            padding: const EdgeInsets.all(16.0),
+            height: 60,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Total: ₹${totalAmount.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-            );
-          }
-        }).toList(),
-      ),
-      bottomNavigationBar: BottomAppBar(
-        child: Container(
-          padding: const EdgeInsets.all(16.0),
-          height: 60,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Total: ₹${totalAmount.toStringAsFixed(2)}',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+                ElevatedButton(
+                  onPressed: _isCheckingOut ? null : _checkout,
+                  child: _isCheckingOut
+                      ? const CircularProgressIndicator()
+                      : const Text('Checkout'),
                 ),
-              ),
-              ElevatedButton(
-                onPressed: cart.isEmpty || _isCheckingOut ? null : _checkout,
-                child: _isCheckingOut
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text('Checkout'),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
