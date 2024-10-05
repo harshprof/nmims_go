@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "141218955216",
+    "project_id": "workspace-dd9c5",
+    "storage_bucket": "workspace-dd9c5.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:141218955216:android:968ef33c54e3db3e44c3d5",
+        "android_client_info": {
+          "package_name": "com.example.workspace"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBBL0jbAqx3caiO7hVK9MJr1eJxYj5TE6Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
